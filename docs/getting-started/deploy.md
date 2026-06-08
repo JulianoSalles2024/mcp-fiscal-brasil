@@ -10,7 +10,7 @@ Free tier com 750h/mês. Servico dorme apos 15min de inatividade (cold start de 
 
 1. Crie conta em [render.com](https://render.com)
 2. Em **Dashboard -> New -> Blueprint**
-3. Aponte para `https://github.com/nikolasdehor/mcp-fiscal-brasil`
+3. Aponte para `https://github.com/DeHor-Labs/mcp-fiscal-brasil`
 4. Render le `render.yaml` e configura tudo automaticamente
 5. Apos ~3min, você tem URL tipo `mcp-fiscal-brasil.onrender.com`
 
@@ -52,9 +52,11 @@ docker run -d \
   -p 80:8000 \
   -e MCP_FISCAL_CACHE_TTL=600 \
   -e MCP_FISCAL_RATE_LIMIT=10 \
-  ghcr.io/nikolasdehor/mcp-fiscal-brasil:0.2.0 \
+  ghcr.io/dehor-labs/mcp-fiscal-brasil:0.2.1 \
   mcp-fiscal-api
 ```
+
+Em VPS/produção, sempre prefira tags semânticas travadas (`0.2.1`) ou digest SHA256 para evitar deploys não determinísticos.
 
 Ou via docker-compose (`docker-compose.yml` do repo):
 

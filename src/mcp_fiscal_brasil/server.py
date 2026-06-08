@@ -13,6 +13,7 @@ from . import __version__
 from .agentic import (
     analyze_cnpj_compliance,
     compare_tax_regimes,
+    consultar_empresas_lote,
     risk_score_supplier,
     summarize_sped,
     validate_nfe_full,
@@ -25,11 +26,40 @@ from .cpf.tools import validar_cpf_tool
 from .esocial.tools import listar_eventos_esocial, validar_evento_esocial
 from .nfe.tools import consultar_nfe, consultar_status_sefaz, validar_chave_nfe
 from .nfse.tools import consultar_nfse
+from .shared.validators import validate_cnpj
 from .simples.tools import consultar_simples_nacional
 from .sped.tools import analisar_sped, listar_registros_sped
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+MAX_CNPJS_POR_LOTE = 50
+
+
+def _normalizar_e_validar_cnpjs(cnpjs: list[str]) -> list[str]:
+    if len(cnpjs) > MAX_CNPJS_POR_LOTE:
+        raise ValueError(
+            f"Tamanho do lote inválido: recebeu {len(cnpjs)} CNPJs, máximo permitido é "
+            f"{MAX_CNPJS_POR_LOTE}."
+        )
+
+    invalidos: list[str] = []
+    normalizados: list[str] = []
+
+    for cnpj in cnpjs:
+        if not validate_cnpj(cnpj):
+            invalidos.append(cnpj)
+            continue
+        normalizados.append("".join(caractere for caractere in cnpj if caractere.isdigit()))
+
+    if invalidos:
+        raise ValueError(
+            "CNPJ(s) inválido(s) no lote. "
+            f"Verifique o formato e o dígito verificador: {', '.join(invalidos)}"
+        )
+
+    return normalizados
+
 
 app = FastMCP(
     name="MCP Fiscal Brasil",
@@ -218,7 +248,7 @@ async def tool_consultar_status_sefaz(uf: str) -> dict[str, Any]:
     ),
 )
 async def tool_consultar_nfse(
-    número: str,
+    numero: str,
     municipio: str,
     uf: str,
     cnpj_prestador: str | None = None,
@@ -238,7 +268,7 @@ async def tool_consultar_nfse(
     Returns:
         dict com orientacoes de consulta, portal e sistema do municipio e alternativas de automacao.
     """
-    return await consultar_nfse(número, municipio, uf, cnpj_prestador)
+    return await consultar_nfse(numero, municipio, uf, cnpj_prestador)
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +512,28 @@ async def tool_compare_tax_regimes(
 async def tool_risk_score_supplier(cnpj: str, criterios_estritos: bool = False) -> dict[str, Any]:
     """Score de risco para due diligence de fornecedor."""
     resultado = await risk_score_supplier(cnpj, criterios_estritos)
+    return resultado.model_dump(mode="json", exclude_none=True)
+
+
+@app.tool(
+    name="consultar_empresas_lote",
+    description=(
+        "Consulta em lote múltiplos CNPJs e devolve, em uma única chamada, "
+        "o resumo de compliance + score de risco de fornecedor para cada empresa. "
+        "Útil para triagem rápida de carteira de fornecedores, com erros por CNPJ retornados "
+        "se algum dado falhar."
+    ),
+)
+async def tool_consultar_empresas_lote(
+    cnpjs: list[str],
+    criterios_estritos: bool = False,
+) -> dict[str, Any]:
+    """Consulta em lote consolidada de compliance e risco de fornecedores."""
+    cnpjs_normalizados = _normalizar_e_validar_cnpjs(cnpjs)
+    resultado = await consultar_empresas_lote(
+        cnpjs_normalizados,
+        criterios_estritos=criterios_estritos,
+    )
     return resultado.model_dump(mode="json", exclude_none=True)
 
 

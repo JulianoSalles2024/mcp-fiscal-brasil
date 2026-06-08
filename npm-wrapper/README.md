@@ -1,6 +1,6 @@
 # mcp-fiscal-brasil (Node.js wrapper)
 
-Wrapper Node.js/TypeScript para o pacote Python [`mcp-fiscal-brasil`](https://github.com/nikolasdehor/mcp-fiscal-brasil).
+Wrapper Node.js/TypeScript para o pacote Python [`mcp-fiscal-brasil`](https://github.com/DeHor-Labs/mcp-fiscal-brasil).
 
 Permite consultar dados fiscais brasileiros (CNPJ, NFe, SPED, Simples Nacional, compliance) em apps JavaScript/TypeScript chamando o CLI Python por baixo.
 
@@ -16,11 +16,18 @@ uv tool install mcp-fiscal-brasil
 
 Confirme com `mcp-fiscal --help`.
 
-## Instalacao
+## Status de distribuição
+
+Este wrapper ainda não está publicado no npm registry. Use localmente a partir deste diretório ou prefira a REST API para apps Node.js em produção.
+
+## Uso local
 
 ```bash
-npm install mcp-fiscal-brasil
+npm install
+npm run build
 ```
+
+Antes de usar o CLI abaixo, rode `npm run build` neste diretório (ou execute `npm link` após o build para expor `mcp-fiscal` no `PATH`).
 
 ## Uso programatico
 
@@ -44,9 +51,12 @@ console.log(`Melhor regime: ${regimes.melhor_opcao}`);
 ## Uso via CLI
 
 ```bash
-npx mcp-fiscal cnpj 12345678000190
-npx mcp-fiscal compliance 12345678000190
-npx mcp-fiscal regimes --faturamento 500000 --setor servicos
+node dist/cli.js cnpj 12345678000190
+node dist/cli.js compliance 12345678000190
+node dist/cli.js regimes --faturamento 500000 --setor servicos
+
+# Ou (após npm link):
+mcp-fiscal cnpj 12345678000190
 ```
 
 ## Funcoes disponiveis

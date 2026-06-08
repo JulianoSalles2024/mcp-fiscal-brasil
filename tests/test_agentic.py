@@ -7,9 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from mcp_fiscal_brasil import server as mcp_server
 from mcp_fiscal_brasil.agentic import (
     analyze_cnpj_compliance,
     compare_tax_regimes,
+    consultar_empresas_lote,
     risk_score_supplier,
 )
 from mcp_fiscal_brasil.agentic.regimes import (
@@ -18,7 +20,10 @@ from mcp_fiscal_brasil.agentic.regimes import (
     _calc_simples,
 )
 from mcp_fiscal_brasil.agentic.schemas import (
+    ComplianceFinding,
     ComplianceReport,
+    SupplierRiskBatchItem,
+    SupplierRiskBatchResult,
     TaxRegimeComparison,
 )
 from mcp_fiscal_brasil.cnpj.schemas import AtividadeCNAE, CNPJResponse
@@ -71,6 +76,113 @@ def _cnpj_baixado() -> CNPJResponse:
         qsa=[],
         origem="BrasilAPI",
     )
+
+
+# ---------------------------------------------------------------------------
+# consultar_empresas_lote
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_consultar_empresas_lote_retoma_resumos_e_erros() -> None:
+    cnpj_ok = "12.345.678/0001-90"
+    cnpj_baixo = "98.765.432/0001-00"
+    cnpj_falha = "12.345.678"
+
+    with patch("mcp_fiscal_brasil.agentic.supplier.analyze_cnpj_compliance") as mock_compliance:
+
+        async def fake_analyze(value: str) -> ComplianceReport:
+            if value == cnpj_ok:
+                return ComplianceReport(
+                    cnpj="12345678000190",
+                    razao_social="Fornecedor OK",
+                    risco_geral="baixo",
+                    score=90,
+                    achados=[],
+                    resumo_executivo="Ativo e regular.",
+                    fontes_consultadas=["BrasilAPI"],
+                )
+            if value == cnpj_baixo:
+                return ComplianceReport(
+                    cnpj="98765432000100",
+                    razao_social="Fornecedor Baixado",
+                    risco_geral="critico",
+                    score=5,
+                    achados=[
+                        ComplianceFinding(
+                            categoria="situacao_cadastral",
+                            severidade="critico",
+                            titulo="Empresa baixada",
+                            detalhe="Baixada da receita.",
+                        )
+                    ],
+                    resumo_executivo="Inapta para contratação.",
+                    fontes_consultadas=["BrasilAPI"],
+                )
+            raise RuntimeError("Falha simulada")
+
+        mock_compliance.side_effect = fake_analyze
+
+        resultado = await consultar_empresas_lote(
+            [cnpj_ok, cnpj_falha, cnpj_baixo],
+            criterios_estritos=True,
+        )
+
+    assert resultado.total_consultados == 3
+    assert resultado.total_processados == 2
+    assert resultado.criterios_estritos is True
+    assert len(resultado.erros) == 1
+    assert resultado.resultados[1].erro is not None
+    assert "Falha simulada" in (resultado.resultados[1].erro or "")
+    assert resultado.resultados[0].resumo_compliance is not None
+    assert resultado.resultados[0].score_fornecedor is not None
+    assert resultado.resultados[2].score_fornecedor is not None
+    assert resultado.resultados[0].score_fornecedor.score == 80
+    assert resultado.resultados[0].score_fornecedor.recomendacao == "aprovar"
+    assert resultado.resultados[2].score_fornecedor.recomendacao == "recusar"
+    assert mock_compliance.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_tool_consultar_empresas_lote_valida_e_repassa_cnpjs() -> None:
+    retorno = SupplierRiskBatchResult(
+        total_consultados=2,
+        criterios_estritos=True,
+        total_processados=2,
+        resultados=[
+            SupplierRiskBatchItem(cnpj="33000167000101"),
+            SupplierRiskBatchItem(cnpj="33000167000101"),
+        ],
+    )
+
+    with patch(
+        "mcp_fiscal_brasil.server.consultar_empresas_lote",
+        AsyncMock(return_value=retorno),
+    ) as mock_tool:
+        resposta = await mcp_server.tool_consultar_empresas_lote(
+            ["33.000.167/0001-01", "33.000.167/0001-01"],
+            criterios_estritos=True,
+        )
+
+    assert resposta["total_consultados"] == 2
+    assert resposta["criterios_estritos"] is True
+    mock_tool.assert_awaited_once_with(
+        ["33000167000101", "33000167000101"],
+        criterios_estritos=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_consultar_empresas_lote_rejeita_cnpjs_invalidos() -> None:
+    with pytest.raises(ValueError, match=r"CNPJ\(s\) inválido\(s\) no lote"):
+        await mcp_server.tool_consultar_empresas_lote(["12.345.678/0001-90", "11.111.111/1111-11"])
+
+
+@pytest.mark.asyncio
+async def test_tool_consultar_empresas_lote_rejeita_tamanho_excedido() -> None:
+    lotes_validos = ["33.000.167/0001-01"] * 51
+    with pytest.raises(ValueError, match="máximo permitido é 50"):
+        await mcp_server.tool_consultar_empresas_lote(lotes_validos)
 
 
 # ---------------------------------------------------------------------------
