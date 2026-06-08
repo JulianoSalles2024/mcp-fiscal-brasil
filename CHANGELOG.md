@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.2] - 2026-06-08
+
+Release de consolidação dos fluxos agenticos fiscais e da publicação do pacote.
+
+### Added
+- `consultar_empresas_lote` para triagem em lote de fornecedores com compliance, score e erros por CNPJ.
+- Documentação de posicionamento, casos de uso e catálogo agentico v0.2.x.
+- Cobertura de testes para validação de NFSe, sandbox de arquivos da API e path traversal relativo.
+
+### Changed
+- Repositório, docs e metadados migrados para `DeHor-Labs/mcp-fiscal-brasil`.
+- Workflows do GitHub Actions atualizados para versões mais novas de `checkout`, `setup-python`, `cache`, `first-interaction` e `dependabot/fetch-metadata`.
+- Exemplos de Docker e instalação atualizados para a versão `0.2.2`.
+
+### Fixed
+- Validação de CNPJ nos endpoints REST antes de chamar serviços externos.
+- Restrição de caminhos de NFe/SPED a um diretório base configurável com permissão restritiva.
+- Validação de entradas NFSe e padronização do campo `numero`.
+- Processamento em lote com concorrência controlada, limite de lote e logs estruturados de falha.
+
 ## [0.2.0] - 2026-05-20
 
 Release focada em produzir o MCP fiscal brasileiro mais completo do mercado.

@@ -48,7 +48,7 @@
     ```toml
     [project]
     dependencies = [
-        "mcp-fiscal-brasil>=0.2.1",
+        "mcp-fiscal-brasil>=0.2.2",
     ]
     ```
 
@@ -63,7 +63,7 @@
 
 ```bash
 mcp-fiscal version
-# mcp-fiscal-brasil 0.2.1
+# mcp-fiscal-brasil 0.2.2
 ```
 
 ```bash

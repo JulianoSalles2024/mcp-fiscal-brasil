@@ -3,7 +3,7 @@
   "name": "io.github.dehor-labs/mcp-fiscal-brasil",
   "title": "MCP Fiscal Brasil",
   "description": "Servidor MCP para integrar IAs com o sistema fiscal brasileiro: CNPJ, NFe, NFSe, SPED, eSocial.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "repository": {
     "url": "https://github.com/DeHor-Labs/mcp-fiscal-brasil",
     "source": "github"
@@ -13,7 +13,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "mcp-fiscal-brasil",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
