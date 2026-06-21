@@ -15,6 +15,7 @@ OpenAPI docs em http://localhost:8000/docs (Swagger UI).
 from __future__ import annotations
 
 import os
+from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
@@ -32,6 +33,7 @@ from .agentic import (
     summarize_sped,
     validate_nfe_full,
 )
+from .bcb.client import BCBClient
 from .cep.client import CEPClient
 from .cnpj.tools import consultar_cnpj
 from .cpf.tools import validar_cpf_tool
@@ -383,6 +385,57 @@ a { color:var(--accent); }
 def root() -> HTMLResponse:
     """Web UI demo (htmx)."""
     return HTMLResponse(_DEMO_HTML)
+
+
+# ---------------------------------------------------------------------------
+# Banco Central (Selic, IPCA, PTAX, correcao monetaria)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/v1/bcb/selic", tags=["bcb"], summary="Taxa Selic diaria por periodo")
+async def bcb_selic(
+    data_inicio: date = Query(..., description="Data inicial (YYYY-MM-DD)"),
+    data_fim: date | None = Query(None, description="Data final (YYYY-MM-DD); padrao: hoje"),
+) -> dict[str, Any]:
+    """Serie diaria da taxa Selic efetiva (SGS 11)."""
+    client = BCBClient()
+    serie = await client.taxa_selic(data_inicio, data_fim)
+    return {"serie": [s.model_dump(mode="json", exclude_none=True) for s in serie]}
+
+
+@app.get("/v1/bcb/ipca", tags=["bcb"], summary="IPCA mensal por periodo")
+async def bcb_ipca(
+    data_inicio: date = Query(..., description="Data inicial (YYYY-MM-DD)"),
+    data_fim: date | None = Query(None, description="Data final (YYYY-MM-DD); padrao: hoje"),
+) -> dict[str, Any]:
+    """Serie mensal do IPCA (SGS 433)."""
+    client = BCBClient()
+    serie = await client.ipca_periodo(data_inicio, data_fim)
+    return {"serie": [s.model_dump(mode="json", exclude_none=True) for s in serie]}
+
+
+@app.get("/v1/bcb/ptax", tags=["bcb"], summary="Cotacao PTAX (compra/venda)")
+async def bcb_ptax(
+    data: date = Query(..., description="Data da cotacao (YYYY-MM-DD)"),
+    moeda: str = Query("USD", description="Codigo da moeda (ex.: USD, EUR)"),
+) -> dict[str, Any]:
+    """Cotacao PTAX do Banco Central para a data e moeda."""
+    client = BCBClient()
+    resultado = await client.ptax_data(data, moeda)
+    return resultado.model_dump(mode="json", exclude_none=True)
+
+
+@app.get("/v1/bcb/correcao", tags=["bcb"], summary="Correcao monetaria (IPCA ou Selic)")
+async def bcb_correcao(
+    valor: float = Query(..., gt=0, description="Valor original em reais"),
+    data_inicio: date = Query(..., description="Data inicial (YYYY-MM-DD)"),
+    data_fim: date = Query(..., description="Data final (YYYY-MM-DD)"),
+    indice: str = Query("IPCA", description="Indice: IPCA ou SELIC"),
+) -> dict[str, Any]:
+    """Corrige um valor entre duas datas por IPCA ou Selic (juros/correcao)."""
+    client = BCBClient()
+    resultado = await client.calcular_correcao_monetaria(valor, data_inicio, data_fim, indice)
+    return resultado.model_dump(mode="json", exclude_none=True)
 
 
 # ---------------------------------------------------------------------------
