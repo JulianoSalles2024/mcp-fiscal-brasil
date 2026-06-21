@@ -15,6 +15,7 @@ OpenAPI docs em http://localhost:8000/docs (Swagger UI).
 from __future__ import annotations
 
 import os
+import unicodedata
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
@@ -30,6 +31,7 @@ from .agentic import (
     analyze_cnpj_compliance,
     compare_tax_regimes,
     risk_score_supplier,
+    simular_transicao_reforma_tributaria,
     summarize_sped,
     validate_nfe_full,
 )
@@ -39,6 +41,7 @@ from .cnpj.tools import consultar_cnpj
 from .cpf.tools import validar_cpf_tool
 from .ibge.client import IBGEClient
 from .nfe.tools import validar_chave_nfe
+from .nfse.tools import consultar_nfse
 from .shared.validators import validate_cnpj
 from .simples.client import SimplesClient
 from .tabelas.tools import (
@@ -525,6 +528,86 @@ async def tabela_icms(
         )
     except Exception as exc:  # noqa: BLE001
         return _tabela_erro(exc)
+
+
+# ---------------------------------------------------------------------------
+# Reforma Tributaria (LC 214/2025) - simulador de transicao IBS/CBS
+# ---------------------------------------------------------------------------
+
+# Mapeamentos de normalizacao: chave sem acento em casefold -> valor canonico.
+# Permitem que o endpoint REST aceite "comercio"/"COMERCIO"/"Comércio" etc.
+_MAPA_SETOR: dict[str, Literal["comércio", "serviços", "indústria"]] = {
+    "comercio": "comércio",
+    "servicos": "serviços",
+    "industria": "indústria",
+}
+
+_MAPA_REGIME: dict[str, Literal["Simples Nacional", "Lucro Presumido", "Lucro Real"]] = {
+    "simples nacional": "Simples Nacional",
+    "simples": "Simples Nacional",
+    "lucro presumido": "Lucro Presumido",
+    "presumido": "Lucro Presumido",
+    "lucro real": "Lucro Real",
+    "real": "Lucro Real",
+}
+
+
+def _sem_acentos(texto: str) -> str:
+    """Remove diacriticos (ex.: 'comércio' -> 'comercio')."""
+    normalizado = unicodedata.normalize("NFKD", texto)
+    return "".join(c for c in normalizado if not unicodedata.combining(c))
+
+
+@app.get("/v1/reforma/simular", tags=["reforma"], summary="Simula transicao IBS/CBS (LC 214/2025)")
+def reforma_simular(
+    faturamento_anual: float = Query(..., gt=0, description="Receita bruta anual em reais"),
+    setor: str = Query(..., description="comercio, servicos ou industria"),
+    regime_atual: str = Query(..., description="Simples Nacional, Lucro Presumido ou Lucro Real"),
+    aliquota_icms_atual: float | None = Query(None, ge=0, le=100, description="ICMS % (opcional)"),
+    aliquota_iss_atual: float | None = Query(None, ge=0, le=100, description="ISS % (opcional)"),
+    aliquota_pis_cofins: float | None = Query(None, ge=0, le=100, description="PIS/COFINS % (opcional)"),
+) -> dict[str, Any]:
+    """Projecao ano a ano (2026-2033) da carga sob o regime antigo vs. CBS+IBS."""
+    setor_canonico = _MAPA_SETOR.get(_sem_acentos(setor.strip().casefold()))
+    if setor_canonico is None:
+        raise HTTPException(
+            status_code=400,
+            detail='setor invalido. Use "comercio", "servicos" ou "industria".',
+        )
+    regime_canonico = _MAPA_REGIME.get(_sem_acentos(regime_atual.strip().casefold()))
+    if regime_canonico is None:
+        raise HTTPException(
+            status_code=400,
+            detail='regime_atual invalido. Use "Simples Nacional", "Lucro Presumido" ou "Lucro Real".',
+        )
+    resultado = simular_transicao_reforma_tributaria(
+        faturamento_anual=faturamento_anual,
+        setor=setor_canonico,
+        regime_atual=regime_canonico,
+        aliquota_icms_atual=aliquota_icms_atual,
+        aliquota_iss_atual=aliquota_iss_atual,
+        aliquota_pis_cofins=aliquota_pis_cofins,
+    )
+    return resultado.model_dump(mode="json", exclude_none=True)
+
+
+# ---------------------------------------------------------------------------
+# NFS-e - orientacao de consulta por municipio (sem padrao nacional unico)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/v1/nfse/consultar", tags=["nfse"], summary="Orientacao de consulta de NFS-e")
+async def nfse_consultar(
+    numero: str = Query(..., description="Numero da NFS-e"),
+    municipio: str = Query(..., description="Nome do municipio (ex.: Sao Paulo)"),
+    uf: str = Query(..., description="Sigla do estado (ex.: SP)"),
+    cnpj_prestador: str | None = Query(None, description="CNPJ do prestador (opcional)"),
+) -> dict[str, Any]:
+    """Consulta a API Nacional de NFS-e; se indisponivel, orienta o portal municipal."""
+    try:
+        return await consultar_nfse(numero, municipio, uf, cnpj_prestador)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
