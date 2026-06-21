@@ -59,4 +59,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 # Comando padrao: servidor MCP via stdio (uso por clientes MCP nativos).
 # Sobrescreva para REST API: docker run ... mcp-fiscal-api
-CMD ["mcp-fiscal-brasil"]
+CMD ["mcp-fiscal-api"]
