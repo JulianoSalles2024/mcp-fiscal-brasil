@@ -397,3 +397,30 @@ def run() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     uvicorn.run("mcp_fiscal_brasil.api:app", host=host, port=port, reload=False)
+    
+    # --- Autenticacao Basic Auth (protege a API; libera /health) ---
+  import os as _os, base64 as _b64
+  from starlette.middleware.base import BaseHTTPMiddleware as _BHM
+  from starlette.responses import PlainTextResponse as _PTR
+
+  _FISCAL_KEY = _os.environ.get("FISCAL_API_KEY", "")
+
+
+  class _FiscalAuth(_BHM):
+      async def dispatch(self, request, call_next):
+          if request.url.path == "/health" or not _FISCAL_KEY:
+              return await call_next(request)
+          auth = request.headers.get("authorization", "")
+          ok = False
+          if auth.startswith("Basic "):
+              try:
+                  _, pw = _b64.b64decode(auth[6:]).decode("utf-8").split(":", 1)
+                  ok = pw == _FISCAL_KEY
+              except Exception:
+                  ok = False
+          if not ok:
+              return _PTR("Unauthorized", status_code=401, headers={"WWW-Authenticate": "Basic"})
+          return await call_next(request)
+
+
+  app.add_middleware(_FiscalAuth)
