@@ -41,6 +41,13 @@ from .ibge.client import IBGEClient
 from .nfe.tools import validar_chave_nfe
 from .shared.validators import validate_cnpj
 from .simples.client import SimplesClient
+from .tabelas.tools import (
+    consultar_aliquota_icms,
+    consultar_cest,
+    consultar_cfop,
+    consultar_ncm,
+    validar_cst_tool,
+)
 
 logger = get_logger(__name__)
 
@@ -455,6 +462,69 @@ async def bcb_correcao(
         return resultado.model_dump(mode="json", exclude_none=True)
     except Exception as exc:  # noqa: BLE001
         return _bcb_indisponivel(exc)
+
+
+# ---------------------------------------------------------------------------
+# Tabelas fiscais (NCM, CFOP, CEST, CST, ICMS/DIFAL) - dados offline
+# ---------------------------------------------------------------------------
+
+
+def _tabela_erro(exc: Exception) -> dict[str, Any]:
+    """Resposta amigavel quando uma consulta de tabela falha (ex.: codigo invalido)."""
+    return {"erro": str(exc), "fonte": "tabelas fiscais"}
+
+
+@app.get("/v1/tabelas/ncm/{ncm}", tags=["tabelas"], summary="Consulta codigo NCM")
+async def tabela_ncm(ncm: str) -> dict[str, Any]:
+    """Dados de um codigo NCM (descricao, IPI, unidade tributavel)."""
+    try:
+        return (await consultar_ncm(ncm)).model_dump(mode="json", exclude_none=True)
+    except Exception as exc:  # noqa: BLE001
+        return _tabela_erro(exc)
+
+
+@app.get("/v1/tabelas/cfop/{cfop}", tags=["tabelas"], summary="Consulta codigo CFOP")
+async def tabela_cfop(cfop: str) -> dict[str, Any]:
+    """Dados de um codigo CFOP (descricao, tipo, aplicacao, grupo)."""
+    try:
+        return (await consultar_cfop(cfop)).model_dump(mode="json", exclude_none=True)
+    except Exception as exc:  # noqa: BLE001
+        return _tabela_erro(exc)
+
+
+@app.get("/v1/tabelas/cest/{cest}", tags=["tabelas"], summary="Consulta codigo CEST")
+async def tabela_cest(cest: str) -> dict[str, Any]:
+    """Dados de um codigo CEST (descricao, segmento, NCMs relacionados)."""
+    try:
+        return (await consultar_cest(cest)).model_dump(mode="json", exclude_none=True)
+    except Exception as exc:  # noqa: BLE001
+        return _tabela_erro(exc)
+
+
+@app.get("/v1/tabelas/cst", tags=["tabelas"], summary="Valida CST/CSOSN por regime")
+async def tabela_cst(
+    cst: str = Query(..., description="Codigo CST ou CSOSN"),
+    regime: str = Query("normal", description="'normal' (Real/Presumido) ou 'simples' (Simples Nacional)"),
+) -> dict[str, Any]:
+    """Valida um CST/CSOSN para o regime informado."""
+    try:
+        return (await validar_cst_tool(cst, regime)).model_dump(mode="json", exclude_none=True)
+    except Exception as exc:  # noqa: BLE001
+        return _tabela_erro(exc)
+
+
+@app.get("/v1/tabelas/icms", tags=["tabelas"], summary="Aliquota ICMS interestadual + DIFAL")
+async def tabela_icms(
+    uf_origem: str = Query(..., description="UF de origem (ex.: SP)"),
+    uf_destino: str = Query(..., description="UF de destino (ex.: RS)"),
+) -> dict[str, Any]:
+    """Aliquota de ICMS interestadual e diferencial (DIFAL, EC 87/2015)."""
+    try:
+        return (await consultar_aliquota_icms(uf_origem, uf_destino)).model_dump(
+            mode="json", exclude_none=True
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _tabela_erro(exc)
 
 
 # ---------------------------------------------------------------------------
