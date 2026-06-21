@@ -392,15 +392,26 @@ def root() -> HTMLResponse:
 # ---------------------------------------------------------------------------
 
 
+def _bcb_indisponivel(exc: Exception) -> dict[str, Any]:
+    """Resposta amigavel quando a API do Banco Central falha (ex.: 502 do BCB)."""
+    return {
+        "erro": "Banco Central (BCB) indisponivel no momento. Tente novamente mais tarde.",
+        "fonte": "Banco Central",
+        "detalhe": str(exc),
+    }
+
+
 @app.get("/v1/bcb/selic", tags=["bcb"], summary="Taxa Selic diaria por periodo")
 async def bcb_selic(
     data_inicio: date = Query(..., description="Data inicial (YYYY-MM-DD)"),
     data_fim: date | None = Query(None, description="Data final (YYYY-MM-DD); padrao: hoje"),
 ) -> dict[str, Any]:
     """Serie diaria da taxa Selic efetiva (SGS 11)."""
-    client = BCBClient()
-    serie = await client.taxa_selic(data_inicio, data_fim)
-    return {"serie": [s.model_dump(mode="json", exclude_none=True) for s in serie]}
+    try:
+        serie = await BCBClient().taxa_selic(data_inicio, data_fim)
+        return {"serie": [s.model_dump(mode="json", exclude_none=True) for s in serie]}
+    except Exception as exc:  # noqa: BLE001
+        return _bcb_indisponivel(exc)
 
 
 @app.get("/v1/bcb/ipca", tags=["bcb"], summary="IPCA mensal por periodo")
@@ -409,9 +420,11 @@ async def bcb_ipca(
     data_fim: date | None = Query(None, description="Data final (YYYY-MM-DD); padrao: hoje"),
 ) -> dict[str, Any]:
     """Serie mensal do IPCA (SGS 433)."""
-    client = BCBClient()
-    serie = await client.ipca_periodo(data_inicio, data_fim)
-    return {"serie": [s.model_dump(mode="json", exclude_none=True) for s in serie]}
+    try:
+        serie = await BCBClient().ipca_periodo(data_inicio, data_fim)
+        return {"serie": [s.model_dump(mode="json", exclude_none=True) for s in serie]}
+    except Exception as exc:  # noqa: BLE001
+        return _bcb_indisponivel(exc)
 
 
 @app.get("/v1/bcb/ptax", tags=["bcb"], summary="Cotacao PTAX (compra/venda)")
@@ -420,9 +433,11 @@ async def bcb_ptax(
     moeda: str = Query("USD", description="Codigo da moeda (ex.: USD, EUR)"),
 ) -> dict[str, Any]:
     """Cotacao PTAX do Banco Central para a data e moeda."""
-    client = BCBClient()
-    resultado = await client.ptax_data(data, moeda)
-    return resultado.model_dump(mode="json", exclude_none=True)
+    try:
+        resultado = await BCBClient().ptax_data(data, moeda)
+        return resultado.model_dump(mode="json", exclude_none=True)
+    except Exception as exc:  # noqa: BLE001
+        return _bcb_indisponivel(exc)
 
 
 @app.get("/v1/bcb/correcao", tags=["bcb"], summary="Correcao monetaria (IPCA ou Selic)")
@@ -433,26 +448,13 @@ async def bcb_correcao(
     indice: str = Query("IPCA", description="Indice: IPCA ou SELIC"),
 ) -> dict[str, Any]:
     """Corrige um valor entre duas datas por IPCA ou Selic (juros/correcao)."""
-    client = BCBClient()
-    resultado = await client.calcular_correcao_monetaria(valor, data_inicio, data_fim, indice)
-    return resultado.model_dump(mode="json", exclude_none=True)
-
-
-# --- TEMP DEBUG: expor traceback de erros nao tratados (remover depois) ---
-from fastapi.responses import JSONResponse as _JSONResponse  # noqa: E402
-import traceback as _tb  # noqa: E402
-
-
-@app.exception_handler(Exception)
-async def _debug_unhandled(request, exc):  # noqa: ANN001, ANN201
-    return _JSONResponse(
-        status_code=500,
-        content={
-            "error_type": type(exc).__name__,
-            "error": str(exc),
-            "trace": _tb.format_exc().splitlines()[-14:],
-        },
-    )
+    try:
+        resultado = await BCBClient().calcular_correcao_monetaria(
+            valor, data_inicio, data_fim, indice
+        )
+        return resultado.model_dump(mode="json", exclude_none=True)
+    except Exception as exc:  # noqa: BLE001
+        return _bcb_indisponivel(exc)
 
 
 # ---------------------------------------------------------------------------
