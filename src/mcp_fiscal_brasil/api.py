@@ -438,6 +438,23 @@ async def bcb_correcao(
     return resultado.model_dump(mode="json", exclude_none=True)
 
 
+# --- TEMP DEBUG: expor traceback de erros nao tratados (remover depois) ---
+from fastapi.responses import JSONResponse as _JSONResponse  # noqa: E402
+import traceback as _tb  # noqa: E402
+
+
+@app.exception_handler(Exception)
+async def _debug_unhandled(request, exc):  # noqa: ANN001, ANN201
+    return _JSONResponse(
+        status_code=500,
+        content={
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "trace": _tb.format_exc().splitlines()[-14:],
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
