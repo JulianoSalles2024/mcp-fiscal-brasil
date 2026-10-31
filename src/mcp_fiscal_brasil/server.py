@@ -4,11 +4,14 @@ Servidor MCP Fiscal Brasil.
 Registra todas as ferramentas fiscais e expõe via protocolo MCP (Model Context Protocol).
 """
 
+import asyncio
 import logging
 import unicodedata
 from typing import Any, Literal
 
 from fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from . import __version__
 from .agentic import (
@@ -31,6 +34,7 @@ from .cpf.tools import validar_cpf_tool
 from .empresa import _tools as empresa_tools
 from .esocial.tools import listar_eventos_esocial, validar_evento_esocial
 from .ibge import _tools as ibge_tools
+from .importacao import _tools as importacao_tools
 from .mei import _tools as mei_tools
 from .nfe.assinatura import AssinaturaResult, validar_assinatura_nfe
 from .nfe.danfe import DanfeResult, gerar_danfe
@@ -41,7 +45,12 @@ from .nfe.distribuicao import (
     manifestar_nfe,
 )
 from .nfe.documento import parse_nfe_documento
-from .nfe.tools import consultar_nfe, consultar_status_sefaz, validar_chave_nfe
+from .nfe.tools import (
+    consultar_nfce,
+    consultar_nfe,
+    consultar_status_sefaz,
+    validar_chave_nfe,
+)
 from .nfse.tools import consultar_nfse
 from .shared.validators import normalizar_cnpj, validate_cnpj_qualquer
 from .simples.tools import consultar_simples_nacional
@@ -52,6 +61,19 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 MAX_CNPJS_POR_LOTE = 50
+
+
+def _validar_cnpj_ou_erro(cnpj: str) -> None:
+    """Rejeita CNPJ com dígito verificador inválido antes de qualquer consulta externa.
+
+    Evita que as tools agenticas disparem consultas (Receita, Simples, MEI) para
+    um valor que nunca poderia existir.
+    """
+    if not validate_cnpj_qualquer(cnpj):
+        raise ValueError(
+            f"CNPJ inválido: {cnpj}. Verifique o formato e o dígito verificador "
+            "(numérico ou alfanumérico, com ou sem máscara)."
+        )
 
 
 def _normalizar_e_validar_cnpjs(cnpjs: list[str]) -> list[str]:
@@ -89,6 +111,18 @@ app = FastMCP(
     ),
 )
 
+
+@app.custom_route("/health", methods=["GET"], include_in_schema=False)
+async def health(_request: Request) -> JSONResponse:
+    """Healthcheck HTTP para os transportes http/sse (FastMCP so expoe /mcp por padrao).
+
+    Consumido por scripts/docker_healthcheck.py quando o container roda em
+    modo --transport http/sse. No modo stdio (padrao), essa rota nunca e
+    montada, e o healthcheck do container degrada para "pacote importa".
+    """
+    return JSONResponse({"status": "ok"})
+
+
 # ---------------------------------------------------------------------------
 # CNPJ
 # ---------------------------------------------------------------------------
@@ -100,7 +134,8 @@ app = FastMCP(
         "Consulta os dados cadastrais completos de uma empresa pelo CNPJ. "
         "Retorna razão social, endereço, atividades econômicas (CNAE), "
         "sócios (QSA), situação cadastral e porte da empresa. "
-        "Aceita CNPJ com ou sem formatação (pontos, barra, traço)."
+        "Aceita CNPJ numérico ou alfanumérico (IN RFB 2.229/2024), "
+        "com ou sem formatação (pontos, barra, traço)."
     ),
 )
 async def tool_consultar_cnpj(cnpj: str) -> dict[str, Any]:
@@ -112,7 +147,8 @@ async def tool_consultar_cnpj(cnpj: str) -> dict[str, Any]:
     Util para identificar empresas, validar fornecedores/clientes e preencher dados fiscais.
 
     Args:
-        cnpj: Numero do CNPJ com 14 digitos, com ou sem formatacao
+        cnpj: Numero do CNPJ com 14 caracteres (numerico ou alfanumerico, IN RFB 2.229/2024),
+            com ou sem formatacao
             (ex.: "11.222.333/0001-81" ou "11222333000181").
 
     Returns:
@@ -209,6 +245,31 @@ async def tool_consultar_nfe(chave_acesso: str) -> dict[str, Any]:
 
 
 @app.tool(
+    name="consultar_nfce",
+    description=(
+        "Consulta os dados de uma Nota Fiscal de Consumidor Eletrônica (NFC-e, modelo 65) "
+        "pela chave de acesso de 44 dígitos. A NFC-e é a nota do varejo ao consumidor final. "
+        "A cobertura completa depende do provedor premium opcional cpfcnpj.com.br (pacote 102), "
+        "habilitado por token; sem token, use a NF-e (modelo 55) em consultar_nfe."
+    ),
+)
+async def tool_consultar_nfce(chave_acesso: str) -> dict[str, Any]:
+    """Consulta uma NFC-e (Nota Fiscal de Consumidor Eletronica, modelo 65) pela chave de acesso.
+
+    Recupera emitente, destinatario e totais no mesmo layout da NF-e. A cobertura depende do
+    provedor premium opcional cpfcnpj.com.br (pacote 102), habilitado por token.
+
+    Args:
+        chave_acesso: Chave de acesso da NFC-e com 44 digitos (aceita com ou sem espacos).
+
+    Returns:
+        dict com emitente, destinatario, totais e protocolo da nota.
+    """
+    resultado = await consultar_nfce(chave_acesso)
+    return resultado.model_dump(mode="json", exclude_none=True)
+
+
+@app.tool(
     name="validar_chave_nfe",
     description=(
         "Valida o formato e o dígito verificador de uma chave de acesso de NFe. "
@@ -235,22 +296,33 @@ async def tool_validar_chave_nfe(chave_acesso: str) -> dict[str, Any]:
 @app.tool(
     name="consultar_status_sefaz",
     description=(
-        "Consulta o status atual do serviço SEFAZ de um estado brasileiro. "
-        "Verifica se o webservice da SEFAZ para emissão de NFe está operacional. "
-        "Útil para diagnosticar falhas de transmissão de notas fiscais."
+        "Consulta o status real do serviço SEFAZ de um estado brasileiro via "
+        "NfeStatusServico4 (mTLS). Verifica se o webservice da SEFAZ para emissão "
+        "de NFe está operacional. Útil para diagnosticar falhas de transmissão de "
+        "notas fiscais. Requer certificado digital A1 configurado no servidor "
+        "(NFE_CERTIFICADO_PATH / NFE_CERTIFICADO_SENHA) - mTLS é exigência de "
+        "transporte de todo webservice SEFAZ, inclusive consulta de status."
     ),
 )
 async def tool_consultar_status_sefaz(uf: str) -> dict[str, Any]:
-    """Consulta o status do servico de autorizacao de NF-e da SEFAZ de uma UF.
+    """Consulta o status real do servico de autorizacao de NF-e da SEFAZ de uma UF.
 
     Indica se o webservice da SEFAZ do estado esta operacional, util para diagnosticar
     falhas na transmissao de notas fiscais.
+
+    IMPORTANTE: exige certificado digital A1 configurado no servidor via
+    NFE_CERTIFICADO_PATH / NFE_CERTIFICADO_SENHA. mTLS e exigencia de transporte
+    de todo webservice SEFAZ, inclusive consulta de status - sem certificado,
+    esta tool levanta FiscalConfigurationError.
 
     Args:
         uf: Sigla do estado com 2 letras (ex.: "SP", "MG", "RJ"). Validada contra as UFs do Brasil.
 
     Returns:
         dict com o status atual do servico e a descricao correspondente.
+
+    Raises:
+        FiscalConfigurationError: certificado digital A1 nao configurado no servidor.
     """
     resultado = await consultar_status_sefaz(uf)
     return resultado.model_dump(mode="json", exclude_none=True)
@@ -328,7 +400,7 @@ async def tool_gerar_danfe(xml_content: str) -> dict[str, Any]:
     description=(
         "Valida a assinatura digital XMLDSig de uma NF-e. "
         "Verifica a integridade do DigestValue e a assinatura criptografica do certificado. "
-        "Extrai dados do certificado assinante: titular, CNPJ/CPF, validade e autoridade certificadora. "
+        "Extrai dados do certificado assinante: titular, CNPJ, validade e autoridade certificadora. "
         "Opcional: informe um CA bundle PEM para validar a cadeia de confianca ICP-Brasil."
     ),
 )
@@ -339,7 +411,7 @@ async def tool_validar_assinatura_nfe(
     """Valida a assinatura digital XMLDSig de uma NF-e.
 
     Verifica a integridade (DigestValue) e a assinatura criptografica do
-    elemento Signature presente em infNFe. Extrai dados do certificado assinante.
+    infNFe referenciado pela Signature, filha de NFe. Extrai dados do certificado assinante.
 
     Sem ca_bundle: valida apenas a assinatura criptografica e integridade do digest
     usando o certificado embutido no proprio XML. Nao verifica se o certificado
@@ -357,7 +429,8 @@ async def tool_validar_assinatura_nfe(
         dict com assinatura_valida (bool), motivo (se invalida), titular (CN),
         cnpj_cpf, validade_inicio, validade_fim e ac_emissora.
     """
-    resultado: AssinaturaResult = validar_assinatura_nfe(
+    resultado: AssinaturaResult = await asyncio.to_thread(
+        validar_assinatura_nfe,
         xml_content,
         ca_bundle=ca_bundle.encode() if ca_bundle else None,
     )
@@ -588,7 +661,7 @@ async def tool_consultar_simples_nacional(cnpj: str) -> dict[str, Any]:
     Util para definir o regime tributario antes de calcular impostos ou tributar notas fiscais.
 
     Args:
-        cnpj: Numero do CNPJ com 14 digitos, com ou sem formatacao.
+        cnpj: Numero do CNPJ com 14 caracteres (numerico ou alfanumerico, IN RFB 2.229/2024), com ou sem formatacao.
 
     Returns:
         dict com a situacao no Simples Nacional e no MEI e respectivas datas.
@@ -776,11 +849,12 @@ async def tool_analyze_cnpj_compliance(cnpj: str) -> dict[str, Any]:
     um relatorio com score 0-100, classificacao de risco e achados acionaveis.
 
     Args:
-        cnpj: Numero do CNPJ com 14 digitos, com ou sem formatacao.
+        cnpj: Numero do CNPJ com 14 caracteres (numerico ou alfanumerico, IN RFB 2.229/2024), com ou sem formatacao.
 
     Returns:
         dict com score, risco, situacao, regime, cnae e lista de achados.
     """
+    _validar_cnpj_ou_erro(cnpj)
     resultado = await analyze_cnpj_compliance(cnpj)
     return resultado.model_dump(mode="json", exclude_none=True)
 
@@ -943,12 +1017,13 @@ async def tool_risk_score_supplier(cnpj: str, criterios_estritos: bool = False) 
     politicas anti-corrupcao (ex: Lei 12.846/2013).
 
     Args:
-        cnpj: Numero do CNPJ com 14 digitos, com ou sem formatacao.
+        cnpj: Numero do CNPJ com 14 caracteres (numerico ou alfanumerico, IN RFB 2.229/2024), com ou sem formatacao.
         criterios_estritos: Se True, aplica pesos mais rigorosos. Padrao: False.
 
     Returns:
         dict com score, recomendacao e justificativa da classificacao.
     """
+    _validar_cnpj_ou_erro(cnpj)
     resultado = await risk_score_supplier(cnpj, criterios_estritos)
     return resultado.model_dump(mode="json", exclude_none=True)
 
@@ -1026,6 +1101,7 @@ cnae_tools.register(app)
 ibge_tools.register(app)
 mei_tools.register(app)
 empresa_tools.register(app)
+importacao_tools.register(app)
 
 
 def main() -> None:

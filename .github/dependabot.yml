@@ -8,9 +8,16 @@ updates:
     labels:
       - "dependencies"
   - package-ecosystem: "github-actions"
+    ignore:
+      - dependency-name: "actions/ai-inference"
+        update-types: ["version-update:semver-major"]
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
     labels:
       - "ci"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

@@ -1,12 +1,33 @@
 """Testes para o modulo NFe."""
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.x509.oid import NameOID
+from lxml import etree
 
-from mcp_fiscal_brasil.nfe.client import NFEClient, _extrair_info_chave
-from mcp_fiscal_brasil.nfe.tools import consultar_nfe, consultar_status_sefaz, validar_chave_nfe
-from mcp_fiscal_brasil.shared.exceptions import APIError, RateLimitError, ValidationError
+from mcp_fiscal_brasil._core.config import settings as nfe_settings
+from mcp_fiscal_brasil._core.errors import FiscalConfigurationError
+from mcp_fiscal_brasil.nfe.client import NFEClient, _extrair_info_chave, _parse_valor_br
+from mcp_fiscal_brasil.nfe.status_sefaz import _obter_ssl_context
+from mcp_fiscal_brasil.nfe.tools import (
+    consultar_nfce,
+    consultar_nfe,
+    consultar_status_sefaz,
+    validar_chave_nfe,
+)
+from mcp_fiscal_brasil.shared.exceptions import (
+    APIError,
+    RateLimitError,
+    ValidationError,
+)
+
+_NS_NFE = "http://www.portalfiscal.inf.br/nfe"
 
 
 class TestValidarChaveNFe:
@@ -39,20 +60,85 @@ class TestValidarChaveNFe:
         assert resultado["cnpj_emitente"] == "12345678901234"
 
 
+def _gerar_pfx_teste(tmp_path_factory: pytest.TempPathFactory) -> str:
+    chave = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COUNTRY_NAME, "BR"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "EMPRESA TESTE:12345678000195"),
+        ]
+    )
+    certificado = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(chave.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(UTC))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=365))
+        .sign(chave, hashes.SHA256())
+    )
+    pfx_bytes = pkcs12.serialize_key_and_certificates(
+        b"cert_teste_nfe",
+        chave,
+        certificado,
+        None,
+        serialization.BestAvailableEncryption(b"senha_teste"),
+    )
+    tmp_dir = tmp_path_factory.mktemp("certs_nfe_tools")
+    pfx_path = str(tmp_dir / "cert_teste.pfx")
+    with open(pfx_path, "wb") as f:
+        f.write(pfx_bytes)
+    return pfx_path
+
+
+def _montar_ret_stat_serv_operacional() -> etree._Element:
+    body_str = (
+        f'<retConsStatServ versao="4.00" xmlns="{_NS_NFE}">'
+        "<tpAmb>1</tpAmb>"
+        "<cStat>107</cStat>"
+        "<xMotivo>Servico em Operacao</xMotivo>"
+        "<cUF>35</cUF>"
+        "<dhRecbto>2026-07-18T10:00:00-03:00</dhRecbto>"
+        "<tMed>1</tMed>"
+        "</retConsStatServ>"
+    )
+    return etree.fromstring(body_str.encode())
+
+
 class TestConsultarStatusSEFAZ:
     async def test_uf_invalida_levanta_erro(self) -> None:
         with pytest.raises(ValidationError) as exc_info:
             await consultar_status_sefaz("XX")
         assert exc_info.value.field == "uf"
 
-    async def test_uf_valida_retorna_status(self) -> None:
-        # Pode falhar se SEFAZ/API estiver indisponivel em CI
-        try:
+    async def test_sem_certificado_levanta_configuration_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(nfe_settings, "nfe_certificado_path", "")
+        monkeypatch.setattr(nfe_settings, "nfe_certificado_senha", "")
+
+        with pytest.raises(FiscalConfigurationError):
+            await consultar_status_sefaz("SP")
+
+    async def test_uf_valida_com_certificado_retorna_status(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        pfx_path = _gerar_pfx_teste(tmp_path_factory)
+        monkeypatch.setattr(nfe_settings, "nfe_certificado_path", pfx_path)
+        monkeypatch.setattr(nfe_settings, "nfe_certificado_senha", "senha_teste")
+
+        body_mock = _montar_ret_stat_serv_operacional()
+        _obter_ssl_context.cache_clear()
+        with patch(
+            "mcp_fiscal_brasil.nfe.status_sefaz._enviar_soap_mtls",
+            new=AsyncMock(return_value=body_mock),
+        ):
             resultado = await consultar_status_sefaz("SP")
-            assert resultado.uf == "SP"
-            assert resultado.status is not None
-        except Exception as e:
-            assert "ValidationError" not in type(e).__name__
+
+        assert resultado.uf == "SP"
+        assert resultado.status == "OPERACIONAL"
+        assert resultado.código == 107
 
 
 def _chave_valida_sp() -> str:
@@ -163,3 +249,50 @@ class TestNFEClientFallback:
         with pytest.raises(ValidationError) as exc_info:
             await consultar_nfe("1234567890")
         assert exc_info.value.field == "chave_acesso"
+
+
+# Chaves de acesso com digito verificador valido, geradas para os testes.
+_CHAVE_MODELO_55 = "35240112345678000195550010000000121123456782"
+_CHAVE_MODELO_65 = "35240112345678000195650010000000121123456785"
+
+
+class TestConsultarNFCeModelo:
+    async def test_chave_modelo_55_e_rejeitada(self) -> None:
+        # Chave valida de NF-e (modelo 55) nao deve ser aceita como NFC-e.
+        with pytest.raises(ValidationError) as exc_info:
+            await consultar_nfce(_CHAVE_MODELO_55)
+        assert exc_info.value.field == "chave_acesso"
+        assert "modelo 65" in exc_info.value.reason
+
+    async def test_chave_modelo_65_passa_na_validacao(self) -> None:
+        from mcp_fiscal_brasil.nfe.schemas import NFeResponse
+
+        esperado = NFeResponse(chave_acesso=_CHAVE_MODELO_65, modelo="65")
+        with patch(
+            "mcp_fiscal_brasil.nfe.tools._client.consultar_por_chave",
+            new=AsyncMock(return_value=esperado),
+        ) as mock_consulta:
+            resultado = await consultar_nfce(_CHAVE_MODELO_65)
+        assert resultado.modelo == "65"
+        mock_consulta.assert_awaited_once_with(_CHAVE_MODELO_65)
+
+
+class TestParseValorBr:
+    def test_formato_brasileiro_com_milhar_e_decimal(self) -> None:
+        assert _parse_valor_br("1.234,56") == 1234.56
+
+    def test_decimal_com_ponto(self) -> None:
+        assert _parse_valor_br("1234.56") == 1234.56
+
+    def test_decimal_com_ponto_uma_casa(self) -> None:
+        assert _parse_valor_br("1234.5") == 1234.5
+
+    def test_ponto_como_milhar_sem_virgula(self) -> None:
+        assert _parse_valor_br("1.234") == 1234.0
+
+    def test_apenas_inteiro(self) -> None:
+        assert _parse_valor_br("1234") == 1234.0
+
+    def test_vazio_retorna_none(self) -> None:
+        assert _parse_valor_br("") is None
+        assert _parse_valor_br(None) is None

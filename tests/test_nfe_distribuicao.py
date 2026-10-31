@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import gzip
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -67,8 +67,8 @@ def certificado_a1(chave_privada_a1: rsa.RSAPrivateKey) -> x509.Certificate:
         .issuer_name(subject)
         .public_key(chave_privada_a1.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+        .not_valid_before(datetime.now(UTC))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=365))
         .sign(chave_privada_a1, hashes.SHA256())
     )
 
@@ -194,7 +194,7 @@ class TestBaixarNfeDistribuicao:
         )
 
         with patch(
-            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap",
+            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap_mtls",
             new=AsyncMock(return_value=body_mock),
         ):
             resultado = await baixar_nfe_distribuicao(
@@ -218,7 +218,7 @@ class TestBaixarNfeDistribuicao:
         )
 
         with patch(
-            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap",
+            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap_mtls",
             new=AsyncMock(return_value=body_mock),
         ):
             resultado = await baixar_nfe_distribuicao(
@@ -243,7 +243,7 @@ class TestBaixarNfeDistribuicao:
         )
 
         with patch(
-            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap",
+            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap_mtls",
             new=AsyncMock(return_value=body_mock),
         ) as mock_soap:
             resultado = await baixar_nfe_distribuicao(
@@ -270,7 +270,7 @@ class TestBaixarNfeDistribuicao:
         )
 
         with patch(
-            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap",
+            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap_mtls",
             new=AsyncMock(return_value=body_mock),
         ) as mock_soap:
             resultado = await baixar_nfe_distribuicao(
@@ -356,7 +356,7 @@ class TestBaixarNfeDistribuicao:
         )
 
         with patch(
-            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap",
+            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap_mtls",
             new=AsyncMock(return_value=body_mock),
         ):
             resultado = await baixar_nfe_distribuicao(
@@ -425,7 +425,7 @@ class TestManifestarNfe:
         body_mock = _montar_retorno_evento_soap()
 
         with patch(
-            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap",
+            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap_mtls",
             new=AsyncMock(return_value=body_mock),
         ):
             resultado = await manifestar_nfe(
@@ -446,7 +446,7 @@ class TestManifestarNfe:
         body_mock = _montar_retorno_evento_soap()
 
         with patch(
-            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap",
+            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap_mtls",
             new=AsyncMock(return_value=body_mock),
         ):
             resultado = await manifestar_nfe(
@@ -489,7 +489,7 @@ class TestManifestarNfe:
         body_mock = _montar_retorno_evento_soap()
 
         with patch(
-            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap",
+            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap_mtls",
             new=AsyncMock(return_value=body_mock),
         ) as mock_soap:
             resultado = await manifestar_nfe(
@@ -533,7 +533,7 @@ class TestManifestarNfe:
         body_mock = _montar_retorno_evento_soap()
 
         with patch(
-            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap",
+            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap_mtls",
             new=AsyncMock(return_value=body_mock),
         ) as mock_soap:
             await manifestar_nfe(
@@ -554,7 +554,7 @@ class TestManifestarNfe:
         body_mock = _montar_retorno_evento_soap()
 
         with patch(
-            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap",
+            "mcp_fiscal_brasil.nfe.distribuicao._enviar_soap_mtls",
             new=AsyncMock(return_value=body_mock),
         ) as mock_soap:
             await manifestar_nfe(
